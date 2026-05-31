@@ -1,0 +1,85 @@
+name: ML Pipeline - Train and Deploy
+
+on:
+  push:
+    branches: [ main, master ]
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  train:
+    name: Train Model
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r ml_pipeline/requirements.txt
+
+      - name: Create models directory
+        run: mkdir -p models
+
+      - name: Run training script
+        run: python ml_pipeline/train.py
+
+      - name: Upload model artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: model-artifacts
+          path: |
+            models/model.txt
+            models/metrics.json
+            models/feature_cols.json
+          retention-days: 7
+
+      - name: Display metrics
+        run: |
+          echo "Model metrics:"
+          cat models/metrics.json
+
+  deploy:
+    name: Trigger Model Reload
+    needs: train
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+
+    steps:
+      - name: Download model artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: model-artifacts
+          path: models/
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Show model info
+        run: |
+          echo "Model artifacts ready:"
+          ls -la models/
+
+      - name: Trigger model reload on API
+        env:
+          API_URL: ${{ secrets.API_URL }}
+        run: |
+          if [ -n "$API_URL" ]; then
+            echo "Sending reload request to $API_URL/model/reload"
+            curl -X POST "$API_URL/model/reload" \
+              -H "Content-Type: application/json" \
+              || echo "Reload endpoint called (no API key required for demo)"
+          else
+            echo "API_URL secret not set. Skipping model reload trigger."
+            echo "To enable auto-reload, add API_URL secret in GitHub Settings -> Secrets and variables -> Actions"
+          fi
